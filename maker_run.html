@@ -1,0 +1,68 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- ПУСКАТЕЛЬ СБОРЩИКА (ТЗ 23.11; docs/MAKER.md §3). Его грузит кадр iframe sandbox="allow-scripts" (без allow-same-origin):
+     происхождение пустое, хранилища, cookies и страницы игры у программы нет. Политика ниже - ровно MAKE_RUN_CSP из
+     src/episodes/veresk9/maker_data.js (сторож make_check mk01 сверяет): ни одного адреса сети, сценарии и стили только
+     встроенные, картинки только data:. Страница игры отдаёт html сообщением, загрузчик пишет его в этот же документ:
+     политика остаётся у документа и после записи, document.open снимает и сам загрузчик. Через srcdoc так нельзя:
+     srcdoc наследует политику игры script-src 'self', и встроенный сценарий программы не запустился бы.
+     ПРОБА ЖИВОСТИ (решение Ren 24.11, MAKER.md §3): загрузчик ставит в документ программы первым сценарием <head> пробу.
+     Она слушает ошибки сценариев первые ALIVE_MS (= MAKE_ALIVE_MS в maker_data.js, сверяет mk01) и смотрит, есть ли на
+     экране хоть что-то видимое; один ответ игре: { t: 'alive', ok, why: '' | 'error' | 'blank' }. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head><body style="margin:0;background:#07100b">
+<script>
+(function () {
+  var ALIVE_MS = 2000;
+  function probe(ms) {
+    /* живёт в документе программы: ошибка сценария или отказ обещания в первые ms - 'error'; к концу ms на экране
+       ничего видимого - 'blank'. Один ответ. */
+    var bad = '';
+    /* ошибка сценария - ErrorEvent; несгруженная картинка data: - простой Event, её не считаем */
+    addEventListener('error', function (e) { if (typeof ErrorEvent !== 'undefined' && e instanceof ErrorEvent) bad = bad || 'error'; }, true);
+    addEventListener('unhandledrejection', function () { bad = bad || 'error'; });
+    function shown() {
+      var b = document.body;
+      if (!b) return false;
+      if (String(b.innerText || '').trim()) return true;
+      var all = b.getElementsByTagName('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i], tg = String(el.tagName || '').toUpperCase();
+        if (tg === 'SCRIPT' || tg === 'STYLE') continue;
+        var r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        var cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue;
+        if (/^(CANVAS|SVG|IMG|BUTTON|INPUT|SELECT|TEXTAREA|VIDEO)$/.test(tg)) return true;
+        var bg = cs.backgroundColor;
+        if ((bg && bg !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(bg)) || (cs.backgroundImage && cs.backgroundImage !== 'none')) return true;
+        if (parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderLeftWidth) > 0) return true;
+      }
+      return false;
+    }
+    setTimeout(function () {
+      var why = bad;
+      try { if (!why && !shown()) why = 'blank'; } catch (e) { why = why || 'blank'; }
+      parent.postMessage({ t: 'alive', ok: !why, why: why }, '*');
+    }, ms);
+  }
+  var PROBE = '<script>(' + probe.toString() + ')(' + ALIVE_MS + ');<\/script>';
+  function withProbe(h) {
+    /* первым сценарием <head>, иначе сразу после <html>; до <!doctype> ставить нельзя - страница ушла бы в quirks */
+    if (/<head[^>]*>/i.test(h)) return h.replace(/<head[^>]*>/i, function (m) { return m + PROBE; });
+    if (/<html[^>]*>/i.test(h)) return h.replace(/<html[^>]*>/i, function (m) { return m + PROBE; });
+    return PROBE + h;
+  }
+  var done = false;
+  addEventListener('message', function (e) {
+    if (done || e.source !== parent || !e.data || e.data.t !== 'run' || typeof e.data.html !== 'string') return;
+    done = true;
+    document.open();
+    document.write(withProbe(e.data.html));
+    document.close();
+  });
+  parent.postMessage({ t: 'ready' }, '*');
+})();
+</script>
+</body></html>
